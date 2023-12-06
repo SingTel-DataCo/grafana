@@ -39,6 +39,7 @@ type OAuthTokenSync struct {
 	sf             *singleflight.Group
 }
 
+// OAuthTokenHook sync works as long as accessTokenExpirationCheck is enabled and use_refresh_token = true
 func (s *OAuthTokenSync) SyncOauthTokenHook(ctx context.Context, identity *authn.Identity, _ *authn.Request) error {
 	namespace, _ := identity.NamespacedID()
 	// only perform oauth token check if identity is a user
@@ -50,13 +51,8 @@ func (s *OAuthTokenSync) SyncOauthTokenHook(ctx context.Context, identity *authn
 	if identity.SessionToken == nil {
 		return nil
 	}
-
-	// if we recently have performed this it would be cached, so we can skip the hook
-	if _, ok := s.cache.Get(identity.ID); ok {
-		s.log.FromContext(ctx).Debug("OAuth token check is cached", "id", identity.ID)
-		return nil
-	}
-
+	// Checking for user's token validity from cache will not capture the case wherein that user was already
+	// revoked from OAuth Provider. Therefore we should do away with caching.
 	token, exists, err := s.service.HasOAuthEntry(ctx, identity)
 	// user is not authenticated through oauth so skip further checks
 	if !exists {
@@ -64,6 +60,18 @@ func (s *OAuthTokenSync) SyncOauthTokenHook(ctx context.Context, identity *authn
 			s.log.FromContext(ctx).Error("Failed to fetch oauth entry", "id", identity.ID, "error", err)
 		}
 		return nil
+	}
+
+	// Test the access_token by checking if GetUserInfo() returns a valid JSON response
+	apiData, err := s.service.GetUserInfo(ctx, token)
+	if (err == nil) {
+		s.log.Info("oauth2/userinfo", "apiData", apiData)
+	} else {
+		s.log.Error("oauth2/userinfo failed. Will force to reset token expiry. ERROR: " + err.Error())
+		// Setting AccessToken to blank doesn't really reset the token as this class is driven more on the
+		// expiry date of the token. Therefore the Expiry arbitrarily needs to be set to "one minute earlier than now".
+		token.OAuthAccessToken = ""
+		token.OAuthExpiry = time.Now().Add(time.Minute * -1)
 	}
 
 	idTokenExpiry, err := getIDTokenExpiry(token)
@@ -124,6 +132,13 @@ func (s *OAuthTokenSync) SyncOauthTokenHook(ctx context.Context, identity *authn
 			if err != nil {
 				s.log.Error("Failed to get OAuth entry for verifying if token has already been refreshed", "id", identity.ID, "error", err)
 				return nil, err
+			}
+			// For the HasAuthEntry() call above, need to check again for AccessToken validity and override the
+			// Expiry as necessary, to ensure that the user gets revoked from Grafana's internal session management.
+			_, err2 := s.service.GetUserInfo(ctx, token)
+			if (err2 != nil) {
+				s.log.Error("GetUserInfo ERROR(2): " + err2.Error())
+				token.OAuthExpiry = time.Now().Add(time.Minute * -1)
 			}
 
 			// if the access token has already been refreshed by another request (for example in HA scenario)
