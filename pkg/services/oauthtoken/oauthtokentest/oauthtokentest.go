@@ -37,6 +37,10 @@ func (s *Service) TryTokenRefresh(context.Context, *login.UserAuth) error {
 	return nil
 }
 
+func (s *Service) GetUserInfo(context.Context, *login.UserAuth) (string, error) {
+	return "", nil
+}
+
 func (s *Service) InvalidateOAuthTokens(context.Context, *login.UserAuth) error {
 	return nil
 }

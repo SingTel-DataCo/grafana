@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
+	"io"
 	"strings"
+	"net/http"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -43,6 +46,7 @@ type OAuthTokenService interface {
 	IsOAuthPassThruEnabled(*datasources.DataSource) bool
 	HasOAuthEntry(context.Context, identity.Requester) (*login.UserAuth, bool, error)
 	TryTokenRefresh(context.Context, *login.UserAuth) error
+	GetUserInfo(context.Context, *login.UserAuth) (string, error)
 	InvalidateOAuthTokens(context.Context, *login.UserAuth) error
 }
 
@@ -136,6 +140,40 @@ func (o *Service) HasOAuthEntry(ctx context.Context, usr identity.Requester) (*l
 		return nil, false, nil
 	}
 	return authInfo, true, nil
+}
+
+// GetUserInfo() is a wrapper class for calling the OAuth Provider's HTTP API /oauth2/userinfo. This endpoint requires
+// the access_token to be passed as a Bearer in Authorization headers.
+// Normally returns a JSON string response. Returns a pair of empty response and the corresponding error message if
+// the HTTP call failed due to e.g. revoked/expired access_token.
+func (o *Service) GetUserInfo(ctx context.Context, usr *login.UserAuth) (string, error) {
+
+	token := buildOAuthTokenFromAuthInfo(usr)
+	authProvider := usr.AuthModule
+ 	connect, err := o.SocialService.GetConnector(authProvider)
+	// Use reflection to obtain the apiUrl attribute of SocialGenericOAuth connector instance.
+	socialGenericOAuth := reflect.Indirect(reflect.ValueOf(connect))
+	apiUrl := fmt.Sprintf("%v", socialGenericOAuth.FieldByName("apiUrl"))
+
+    req, _ := http.NewRequest("GET", apiUrl, nil)
+    req.Header.Add("Authorization", fmt.Sprintf("Bearer %s", token.AccessToken))
+	client, err := o.SocialService.GetOAuthHttpClient(authProvider)
+	if err != nil {
+		return "", err
+	}
+    resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+    rawJson, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if (resp.StatusCode != 200) {
+		return "", errors.New(string(rawJson))
+	}
+	return string(rawJson), nil
 }
 
 // TryTokenRefresh returns an error in case the OAuth token refresh was unsuccessful
