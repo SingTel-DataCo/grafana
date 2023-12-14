@@ -142,7 +142,7 @@ func (o *Service) HasOAuthEntry(ctx context.Context, usr identity.Requester) (*l
 	return authInfo, true, nil
 }
 
-// GetUserInfo() is a wrapper class for calling the OAuth Provider's HTTP API /oauth2/userinfo. This endpoint requires
+// GetUserInfo() is a wrapper function for calling the OAuth Provider's HTTP API /oauth2/userinfo. This endpoint requires
 // the access_token to be passed as a Bearer in Authorization headers.
 // Normally returns a JSON string response. Returns a pair of empty response and the corresponding error message if
 // the HTTP call failed due to e.g. revoked/expired access_token.
